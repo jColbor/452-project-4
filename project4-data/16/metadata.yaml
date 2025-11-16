@@ -1,0 +1,43 @@
+rosbag2_bagfile_information:
+  compression_format: ''
+  compression_mode: ''
+  custom_data: {}
+  duration:
+    nanoseconds: 70750130690
+  files:
+  - duration:
+      nanoseconds: 70750130690
+    message_count: 2262
+    path: 16.db3
+    starting_time:
+      nanoseconds_since_epoch: 1731509046902596894
+  message_count: 2262
+  relative_file_paths:
+  - 16.db3
+  ros_distro: rosbags
+  starting_time:
+    nanoseconds_since_epoch: 1731509046902596894
+  storage_identifier: sqlite3
+  topics_with_message_count:
+  - message_count: 284
+    topic_metadata:
+      name: /floor_sensor
+      offered_qos_profiles: ''
+      serialization_format: cdr
+      type: example_interfaces/msg/UInt8
+      type_description_hash: RIHS01_9255b6d0dd98f5b573afbff223131279b788ac45cf051fb462c12dd9a30f4061
+  - message_count: 644
+    topic_metadata:
+      name: /compass
+      offered_qos_profiles: ''
+      serialization_format: cdr
+      type: example_interfaces/msg/Float32
+      type_description_hash: RIHS01_6a112d9235f8e8088d7a2bc77cb955341ac0d5c9870bdc592651a4186bb246f3
+  - message_count: 1334
+    topic_metadata:
+      name: /cmd_vel
+      offered_qos_profiles: ''
+      serialization_format: cdr
+      type: geometry_msgs/msg/Twist
+      type_description_hash: RIHS01_9c45bf16fe0983d80e3cfe750d6835843d265a9a6c46bd2e609fcddde6fb8d2a
+  version: 8

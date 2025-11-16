@@ -1,0 +1,29 @@
+# Each cell is a square with this side length,
+# measured in meters.
+resolution: 1.2
+
+# What does the floor look like?
+#   # = dark colored floor
+#   . = light colored floor
+#   Each non-empty line represents one row.
+#   Spaces and empty lines should be ignored.
+#
+# The origin of the 'world' frame is at the
+# bottom left of this map, with its positive
+# x-axis going to the right and its positive
+# y-axis going up from there.
+map: |
+    ##################
+    ###....#####.....#
+    #................#
+    #............#...#
+    ##############...#
+    #####...###..#...#
+    ##.......#.......#
+    ###..............#
+    ###...#........###
+    ##....############
+    ###.......###...##
+    ###.............##
+    ###....##.....####
+    ##################
