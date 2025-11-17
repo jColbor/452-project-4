@@ -1,0 +1,11 @@
+/cmd_vel: geometry_msgs/msg/Twist
+	linear.x = foward/backward motion
+	angular.z = turning
+	
+	
+/compass: example_interfaces/msg/Float32
+	Float from -3.14 to +3.13 (-pi to +pi)
+	
+	
+/floor_sensor: example_interfaces/msg/UInt8
+	Unsigned integer. Very noisy, floats around between 100 and 150, seems to be different colors centerred around 110 and 140.
