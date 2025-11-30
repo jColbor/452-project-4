@@ -24,7 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'input_parser = localization.input_parser:main'
+            'input_parser = localization.input_parser_node:main'
         ],
     },
 )
