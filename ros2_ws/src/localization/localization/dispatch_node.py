@@ -37,7 +37,7 @@ class DispatchNode(Node):
     def __init__(self, name: str = 'dispatch_node'):
         super().__init__(name)
         # Publishers & subscribers
-        self.path_publisher = None
+        self.publisher = None
         self.cmd_vel_sub = None
         self.compass_sub = None
         self.floor_sensor_sub = None
@@ -67,7 +67,7 @@ class DispatchNode(Node):
 
     def initialize(self):
         """Initialize publishers, subscriptions, and timers for the node."""
-        self._pub = self.create_publisher(Point, 'dispatch_out', 10)
+        self.point_publisher = self.create_publisher(Point, '/dispatch_out', 10)
         self.cmd_vel_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_handler, 10)
         self.compass_sub = self.create_subscription(Float32, '/compass', self.compass_handler, 10)
         self.floor_sensor_sub = self.create_subscription(UInt8, '/floor_sensor', self.floor_sensor_handler, 10)
@@ -106,7 +106,7 @@ class DispatchNode(Node):
         displacement_observation_pt.z = avg_floor(self.floor_sensors_raw)
         self.floor_sensors_raw = [] # Clear stored sensor readings after sending
         # Publish the message
-        self._pub.publish(displacement_observation_pt)
+        self.point_publisher.publish(displacement_observation_pt)
         
 
 def main():
