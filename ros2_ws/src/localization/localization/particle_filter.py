@@ -6,7 +6,7 @@ from geometry_msgs.msg import Point, Pose2D # Received from dispatch_node
 # Pose2D to publish best estimate of current pose.
 from nav_msgs.msg import OccupancyGrid # OccupancyGrid to publish the map
 
-from localization.helper_functions import extract_map, scorePoint, scorePath
+from localization.helper_functions import extract_map, scorePoint, scorePath, publish_map
 
 import math
 
@@ -44,10 +44,8 @@ class ParticleFilterNode(Node):
     
     def publish_map(self): #Called every 5 seconds by publish_map_timer
         # Need to publish the map using OccupancyGrid.
-        map_msg = OccupancyGrid()
-        #code here
-        self.get_logger().info(f'Published map: {self.map}')
-        self.map_pub.publish(map_msg)
+        publish_map(self.map, self.map_pub)
+        self.get_logger().info(f'Published map')
     
 
     def compass_handler(self, msg: Float32):

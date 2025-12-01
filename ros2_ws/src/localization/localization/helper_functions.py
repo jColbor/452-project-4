@@ -1,6 +1,7 @@
 import os
-
-
+from nav_msgs.msg import OccupancyGrid # OccupancyGrid to publish the map
+import rclpy
+from rclpy.node import Node
 
 bag_num_to_map_file = {
     '11': 'light.world',
@@ -58,3 +59,8 @@ def scorePath(points, observations, map):
     for i in range(len(points)):
         total_score += scorePoint(points[i], observations[i], map)
     return total_score
+
+def publish_map(map, map_pub):
+    map_msg = OccupancyGrid()
+    #code here
+    map_pub.publish(map_msg)
