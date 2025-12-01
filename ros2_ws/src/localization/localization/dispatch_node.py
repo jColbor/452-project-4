@@ -16,13 +16,15 @@ LIGHT_CENTER = 145
 #  2 - Corresponding observation (light or dark) based on floor_sensor readings
 
 # Take the floor sensor reading (between ~100-160) and normalize it to a value between 0 (dark) and 1 (light)
+# Note: Higher sensor values typically indicate darker surfaces, so we invert the mapping
 def normalize_floor_sensor(reading):
     if reading < DARK_CENTER:
-        return 0.0
+        return 1.0  # Low reading = light surface
     elif reading > LIGHT_CENTER:
-        return 1.0
+        return 0.0  # High reading = dark surface
     else:
-        return (reading - DARK_CENTER) / (LIGHT_CENTER - DARK_CENTER)
+        # Invert: higher reading -> lower normalized value (darker)
+        return 1.0 - ((reading - DARK_CENTER) / (LIGHT_CENTER - DARK_CENTER))
 
 # Compute average of floor sensor values.
 def avg_floor(floor_sensor_values):
@@ -90,23 +92,30 @@ class DispatchNode(Node):
     
     def floor_sensor_handler(self, msg: UInt8):
         # self.get_logger().info(f'Received floor_sensor: value={msg.data}')
-        self.floor_sensors_raw.append(normalize_floor_sensor(msg.data))
+        # Store RAW sensor values, not normalized ones (normalization happens in avg_floor)
+        self.floor_sensors_raw.append(msg.data)
         # self.debug_file.write(f'{msg.data},\n')
 
     # Periodically publish displacement & observation data
     def _on_timer(self):
         self.update_displacement(self.get_clock().now().nanoseconds * 1e-9)
-        if self.displacement == (0,0) or len(self.floor_sensors_raw) == 0:
-            return # No movement or no sensor readings, no need to publish
+        
+        # Only publish if we have sensor readings (even if no movement)
+        if len(self.floor_sensors_raw) == 0:
+            return # No sensor readings, no need to publish
+        
         # Prepare the message to publish
         displacement_observation_pt = Point()
         displacement_observation_pt.x = self.displacement[0]
         displacement_observation_pt.y = self.displacement[1]
-        self.get_logger().info(f'Sending displacement  with {len(self.floor_sensors_raw)} floor sensor readings')
-        displacement_observation_pt.z = avg_floor(self.floor_sensors_raw)
+        observation_value = avg_floor(self.floor_sensors_raw)
+        self.get_logger().info(f'Sending displacement (dx={self.displacement[0]:.3f}, dy={self.displacement[1]:.3f}) with {len(self.floor_sensors_raw)} floor sensor readings, observation={observation_value:.3f}')
+        displacement_observation_pt.z = observation_value
         self.floor_sensors_raw = [] # Clear stored sensor readings after sending
         # Publish the message
         self.point_publisher.publish(displacement_observation_pt)
+        # Reset displacement after publishing
+        self.displacement = (0, 0)
         
 
 def main():
