@@ -13,24 +13,23 @@ import random
 import time
 
 NUM_PARTICLES = 300
-MIN_MOVEMENT_FOR_ELIMINATION = 0.1
-RESAMPLE_NOISE_STD_DEV = 0.1
-WEIGHT_PENALTY_CONSTANT = 10.0
+MIN_MOVEMENT_FOR_ELIMINATION = 0.1 # without this amount of movement no resampling nor assigning weights
+RESAMPLE_NOISE_STD_DEV = 0.1 # deviation of particles
+WEIGHT_PENALTY_CONSTANT = 10.0 # penalty = (1 - penalty_percentage) * weight - penalty_constant
 WEIGHT_PENALTY_PERCENTAGE = 0.3
-RANDOM_RESAMPLING_PERCENTAGE = 0.97
+RANDOM_RESAMPLING_PERCENTAGE = 0.03 # percentage of completely random particles
 MOTION_NOISE_ANGLE_DEG = 15.0  # Maximum angle noise in degrees for particle motion
 MOTION_SCALE_MIN = 0.8  # Minimum scale factor for distance uncertainty
 MOTION_SCALE_MAX = 1.2  # Maximum scale factor for distance uncertainty
 
 class Particle:
-    def __init__(self, initial_x, initial_y, observation_history=None):
+    def __init__(self, initial_x, initial_y):
         self.initial_x = initial_x
         self.initial_y = initial_y
         self.x = initial_x
         self.y = initial_y
         self.weight = 0.0
-        self.path = [(initial_x, initial_y)]  # Each particle has its own path history
-        self.observation_history = observation_history  # Reference to shared observation history
+        self.path = [(initial_x, initial_y)] 
     
     def __repr__(self):
         return f"Particle(x={self.x:.2f}, y={self.y:.2f}, weight={self.weight:.2f})"
@@ -252,15 +251,14 @@ class ParticleFilterNode(Node):
                 particle.path = particle.path[-self.path_history_length:]
         self.update_weights()
         self.resample_particles()
-        self.publish_estimated_pose()
     
     def update_weights(self):
         for particle in self.particles:
-            if len(particle.path) > 0 and particle.observation_history and len(particle.observation_history) > 0:
+            if len(particle.path) > 0 and self.observation_history and len(self.observation_history) > 0:
                 # Use particle's own path and shared observation history
                 # Note: scorePath may need to match path length with observation history length
                 path = particle.path
-                observations = [obs[2] for obs in particle.observation_history[-len(path):]] if len(particle.observation_history) >= len(path) else [obs[2] for obs in particle.observation_history]
+                observations = [obs[2] for obs in self.observation_history[-len(path):]] if len(self.observation_history) >= len(path) else [obs[2] for obs in self.observation_history]
                 if len(observations) == len(path):
                     score = scorePath(path, observations, self.map)
                     particle.weight += score
@@ -290,7 +288,8 @@ class ParticleFilterNode(Node):
         random_particles = int(self.num_particles * RANDOM_RESAMPLING_PERCENTAGE)
         
         for i in range(self.num_particles):
-            if i < random_particles:
+            if i > random_particles:
+                # resampling particle close the high weight particles
                 r = random.uniform(0, total_weight)
                 selected_idx = 0
                 for j, cum in enumerate(cumulative):
@@ -312,6 +311,7 @@ class ParticleFilterNode(Node):
                 # Copy path from old particle (or start fresh)
                 new_particle.path = [(new_x, new_y)]
             else:
+                # completely random particles
                 new_x = random.uniform(0, map_width_m)
                 new_y = random.uniform(0, map_height_m)
                 new_particle = Particle(new_x, new_y, self.observation_history)
@@ -321,22 +321,6 @@ class ParticleFilterNode(Node):
             new_particles.append(new_particle)
         self.particles = new_particles
         self.get_logger().info(f'Resampled {self.num_particles} particles')
-    
-    def publish_estimated_pose(self):
-        if not self.particles:
-            return
-        total_weight = sum(p.weight for p in self.particles)
-        if total_weight <= 0:
-            avg_x = sum(p.x for p in self.particles) / len(self.particles)
-            avg_y = sum(p.y for p in self.particles) / len(self.particles)
-        else:
-            avg_x = sum(p.x * p.weight for p in self.particles) / total_weight
-            avg_y = sum(p.y * p.weight for p in self.particles) / total_weight
-        pose_msg = Pose2D()
-        pose_msg.x = float(avg_x)
-        pose_msg.y = float(avg_y)
-        pose_msg.theta = float(self.current_compass)
-        self.pose_pub.publish(pose_msg)
 
 
 def main():
