@@ -1,4 +1,5 @@
 import os
+import yaml
 from nav_msgs.msg import OccupancyGrid # OccupancyGrid to publish the map
 import rclpy
 from rclpy.node import Node
@@ -45,14 +46,92 @@ def extract_map(node):
     full_map_path = os.path.join(base_path, map_file)
     node.get_logger().info(f'Extracted map file path: {full_map_path}')
 
-    map = []
-    #TODO: Use some YAML library to read the map file and extract it into an easy-to-use format.
-    return map
+    map_dict = {'data': [], 'resolution': 1.2}
+    
+    try:
+        with open(full_map_path, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        resolution = data['resolution']
+        map_dict['resolution'] = resolution
+        map_text = data['map']
+        
+        map_lines = []
+        for line in map_text.strip().split('\n'):
+            stripped = line.strip()
+            if stripped: 
+                map_lines.append(stripped)
+        
+        # Reverse the lines so the first line is at the bottom (origin at bottom-left)
+        map_lines.reverse()
+        
+        # Convert to 2D array: '#' = dark (1), '.' = light (0)
+        for line in map_lines:
+            row = [1 if char == '#' else 0 for char in line]
+            if row:
+                map_dict['data'].append(row)
+        
+        node.get_logger().info(f'Loaded map with resolution {resolution}m')
+    
+    except FileNotFoundError:
+        node.get_logger().error(f'Map file not found: {full_map_path}')
+    except Exception as e:
+        node.get_logger().error(f'Error parsing map file: {str(e)}')
+    
+    return map_dict
 
     
 def scorePoint(point, observation, map):
-    # TODO: implement scoring function for a single point + observation.
-    return 0
+    if not map or 'data' not in map or not map['data'] or len(map['data']) == 0 or len(map['data'][0]) == 0:
+        return -10000
+    
+    resolution = map.get('resolution', 1.2)
+    map_data = map['data']
+    
+    col = int(point[0] / resolution)
+    row = int(point[1] / resolution)
+    
+    if row < 0 or row >= len(map_data) or col < 0 or col >= len(map_data[0]):
+        return -10000
+    
+    def cell_score(r, c):
+        if r < 0 or r >= len(map_data) or c < 0 or c >= len(map_data[0]):
+            return None 
+        map_value = map_data[r][c]
+        expected_observation = 1 - map_value
+        error = abs(observation - expected_observation)
+        return 1.0 - error
+    
+    center_score = cell_score(row, col)
+    if center_score is None:
+        return -10000
+    
+    adjacent_offsets = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, -1),           (0, 1),
+        (1, -1),  (1, 0),  (1, 1)
+    ]
+    
+    adjacent_scores = []
+    for dr, dc in adjacent_offsets:
+        adj_score = cell_score(row + dr, col + dc)
+        if adj_score is not None:
+            adjacent_scores.append(adj_score)
+    
+    if center_score > 0.5:
+        if adjacent_scores:
+            avg_adjacent = sum(adjacent_scores) / len(adjacent_scores)
+            final_score = 0.7 * center_score + 0.3 * avg_adjacent
+        else:
+            final_score = center_score
+    else:
+        if adjacent_scores:
+            best_adjacent = max(adjacent_scores)
+            final_score = max(center_score, best_adjacent * 0.8)
+        else:
+            final_score = center_score
+    
+    return final_score
 
 def scorePath(points, observations, map):
     total_score = 0
@@ -62,5 +141,30 @@ def scorePath(points, observations, map):
 
 def publish_map(map, map_pub):
     map_msg = OccupancyGrid()
-    #code here
+    
+    map_msg.header.frame_id = 'world'
+    
+    if map and 'data' in map and map['data']:
+        map_data = map['data']
+        resolution = map.get('resolution', 1.2)
+        
+        map_msg.info.resolution = resolution
+        map_msg.info.width = len(map_data[0]) if map_data else 0
+        map_msg.info.height = len(map_data)
+        
+        map_msg.info.origin.position.x = 0.0
+        map_msg.info.origin.position.y = 0.0
+        map_msg.info.origin.position.z = 0.0
+        map_msg.info.origin.orientation.w = 1.0
+
+        flat_data = []
+        for row in map_data:
+            for cell in row:
+                if cell == 1:  
+                    flat_data.append(100)
+                else:  
+                    flat_data.append(0)
+        
+        map_msg.data = flat_data
+    
     map_pub.publish(map_msg)
