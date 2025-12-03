@@ -11,6 +11,8 @@ from localization.helper_functions import extract_map, scorePoint, scorePath, pu
 import math
 import random
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 NUM_PARTICLES = 1000
 MIN_MOVEMENT_FOR_ELIMINATION = 0.1 # without this amount of movement no resampling nor assigning weights (deprecated)
@@ -46,6 +48,8 @@ class ParticleFilterNode(Node):
         self.observation_history = []  # Shared observation history for all particles. Max length of MAX_HISTORY_LENGTH
         self.robot_path_x = 0.0
         self.robot_path_y = 0.0
+        self.particle_lock = threading.Lock()
+        self.executor = ThreadPoolExecutor(max_workers=8)
         self.get_logger().info('ParticleFilterNode constructed')
 
     def initialize(self):
@@ -231,6 +235,22 @@ class ParticleFilterNode(Node):
         pose_msg.theta = float(self.current_compass)
         self.pose_pub.publish(pose_msg)
     
+    def update_particle_position(self, particle, dx, dy):
+        noise_angle = random.uniform(-MOTION_NOISE_ANGLE_DEG, MOTION_NOISE_ANGLE_DEG) * math.pi / 180.0
+        cos_a = math.cos(noise_angle)
+        sin_a = math.sin(noise_angle)
+        noisy_dx = dx * cos_a - dy * sin_a
+        noisy_dy = dx * sin_a + dy * cos_a
+        scale = random.uniform(MOTION_SCALE_MIN, MOTION_SCALE_MAX)
+        noisy_dx *= scale
+        noisy_dy *= scale
+        particle.x += noisy_dx
+        particle.y += noisy_dy
+        particle.path.append((particle.x, particle.y))
+        if len(particle.path) > MAX_HISTORY_LENGTH:
+            particle.path = particle.path[-MAX_HISTORY_LENGTH:]
+        return particle
+    
     def displacement_handler(self, msg: Point):
         # Handle incoming displacement and observation data.
         dx = msg.x
@@ -251,34 +271,16 @@ class ParticleFilterNode(Node):
         if len(self.observation_history) > MAX_HISTORY_LENGTH:
             self.observation_history.pop(0)
         
-        # This causes a mis-match between particle paths and observation history lengths.
-        # if displacement_magnitude < MIN_MOVEMENT_FOR_ELIMINATION:
-        #     return
-        
-        for i, particle in enumerate(self.particles):
-            noise_angle = random.uniform(-MOTION_NOISE_ANGLE_DEG, MOTION_NOISE_ANGLE_DEG) * math.pi / 180.0
-            cos_a = math.cos(noise_angle)
-            sin_a = math.sin(noise_angle)
-            noisy_dx = dx * cos_a - dy * sin_a
-            noisy_dy = dx * sin_a + dy * cos_a
-            scale = random.uniform(MOTION_SCALE_MIN, MOTION_SCALE_MAX)
-            noisy_dx *= scale
-            noisy_dy *= scale
-            particle.x += noisy_dx
-            particle.y += noisy_dy
+        # Update all particles in parallel using thread pool
+        with self.particle_lock:
+            futures = []
+            for particle in self.particles:
+                future = self.executor.submit(self.update_particle_position, particle, dx, dy)
+                futures.append(future)
             
-            # Out-of-bounds particles are taken care of by giving them negative weight in update_weights()
-            # resolution = self.map['resolution']
-            # map_width_m = self.map['width'] * resolution
-            # map_height_m = self.map['height'] * resolution
-            # if particle.x < 0 or particle.x >= map_width_m or particle.y < 0 or particle.y >= map_height_m:
-            #     particle.x = random.uniform(0, map_width_m)
-            #     particle.y = random.uniform(0, map_height_m)
-            #     particle.weight = particle.weight / 2.0
-            
-            particle.path.append((particle.x, particle.y))
-            if len(particle.path) > MAX_HISTORY_LENGTH:
-                particle.path = particle.path[-MAX_HISTORY_LENGTH:]
+            # Wait for all particle updates to complete
+            for future in futures:
+                future.result()
         
         # Only resample every MAX_HISTORY_LENGTH steps.
         if len(self.observation_history) >= MAX_HISTORY_LENGTH:
@@ -392,6 +394,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        node.executor.shutdown(wait=True)
         node.destroy_node()
         rclpy.shutdown()
 
