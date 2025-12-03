@@ -12,15 +12,17 @@ import math
 import random
 import time
 
-NUM_PARTICLES = 300
-MIN_MOVEMENT_FOR_ELIMINATION = 0.1 # without this amount of movement no resampling nor assigning weights
+NUM_PARTICLES = 1000
+MIN_MOVEMENT_FOR_ELIMINATION = 0.1 # without this amount of movement no resampling nor assigning weights (deprecated)
 RESAMPLE_NOISE_STD_DEV = 0.1 # deviation of particles
-WEIGHT_PENALTY_CONSTANT = 10.0 # penalty = (1 - penalty_percentage) * weight - penalty_constant
-WEIGHT_PENALTY_PERCENTAGE = 0.3
-RANDOM_RESAMPLING_PERCENTAGE = 0.03 # percentage of completely random particles
-MOTION_NOISE_ANGLE_DEG = 15.0  # Maximum angle noise in degrees for particle motion
+RANDOM_RESAMPLING_PERCENTAGE = 0.01 # percentage of completely random particles
+MOTION_NOISE_ANGLE_DEG = 5.0  # Maximum angle noise in degrees for particle forward motion
 MOTION_SCALE_MIN = 0.8  # Minimum scale factor for distance uncertainty
 MOTION_SCALE_MAX = 1.2  # Maximum scale factor for distance uncertainty
+PARTICLE_BASE_WEIGHT = 0.01 # Base/minimum weight for each particle
+RESEEDED_WEIGHT_PENALTY = 0.2 # one-time penalty to weight of a randomly re-seeded particle. Without this, light.world and dark.world are broken by too many random particles.
+MAX_HISTORY_LENGTH = 10 # Max length of observation & particle path history to keep for scoring
+NOISY_RESAMPLE_POSITIONS = False # Whether to shift particle positions when resampling
 
 class Particle:
     def __init__(self, initial_x, initial_y):
@@ -28,7 +30,7 @@ class Particle:
         self.initial_y = initial_y
         self.x = initial_x
         self.y = initial_y
-        self.weight = 0.0
+        self.weight = PARTICLE_BASE_WEIGHT
         self.path = [(initial_x, initial_y)] 
     
     def __repr__(self):
@@ -41,9 +43,7 @@ class ParticleFilterNode(Node):
         self.particles = []
         self.map = None
         self.num_particles = NUM_PARTICLES
-        self.path_history_length = 10
-        self.observation_history = []  # Shared observation history for all particles
-        self.max_history_length = 500
+        self.observation_history = []  # Shared observation history for all particles. Max length of MAX_HISTORY_LENGTH
         self.robot_path_x = 0.0
         self.robot_path_y = 0.0
         self.get_logger().info('ParticleFilterNode constructed')
@@ -73,22 +73,31 @@ class ParticleFilterNode(Node):
         height = self.map['height']
         self.particles = []
         
-        # Place one particle at the center of each map cell
-        for row in range(height):
-            for col in range(width):
+        # Calculate the number of particles to place for each unit distance
+        area = width * height * (resolution ** 2)
+        distance_step = math.sqrt(area / float(NUM_PARTICLES))
+        particle_rows = int(height * resolution / distance_step)
+        particle_cols = int(width * resolution / distance_step)
+        
+        y = distance_step / 2.0
+        for row in range(particle_rows):
+            x = distance_step / 2.0
+            for col in range(particle_cols):
                 # Calculate center position of this cell in meters
                 # Cell (col, row) has center at (col + 0.5) * resolution, (row + 0.5) * resolution
-                x = (col + 0.5) * resolution
-                y = (row + 0.5) * resolution
+                # x = (col + 0.5) * resolution
+                # y = (row + 0.5) * resolution
                 
-                # Create particle at center of cell
-                particle = Particle(x, y, self.observation_history)
+                # Create particle at position
+                particle = Particle(x, y)
                 self.particles.append(particle)
+                x += distance_step
+            y += distance_step
         
         # Update number of particles to match map size (one per cell)
-        self.num_particles = width * height
+        self.num_particles = particle_rows * particle_cols
         
-        self.get_logger().info(f'Initialized {self.num_particles} particles (one per map cell) in {width}x{height} grid (resolution={resolution}m)')
+        self.get_logger().info(f'Initialized {self.num_particles} particles with distance step {distance_step:.5f} in {width}x{height} grid (resolution={resolution}m)')
     
     def clear_all_visualizations(self):
         clear_particles = MarkerArray()
@@ -113,9 +122,10 @@ class ParticleFilterNode(Node):
     
     def publish_map(self): #Called every 5 seconds by publish_map_timer
         # Need to publish the map using OccupancyGrid.
-        publish_map(self.map, self.map_pub)
+        publish_map(self.map, self.map_pub) #This is from helper_functions.py
         self.get_logger().info(f'Published map')
     
+    # Publish location of particles for visualization (not required output)
     def publish_particles(self):
         if not self.particles:
             return
@@ -204,6 +214,23 @@ class ParticleFilterNode(Node):
         #self.get_logger().info(f'Received compass: heading={msg.data}')
         self.current_compass = msg.data
     
+    # Required to publish pose best estimate. Computed with a weighted average of particle positions with their weights.
+    def publish_estimated_pose(self):
+        if not self.particles:
+            return
+        total_weight = sum(p.weight for p in self.particles)
+        if total_weight <= 0:
+            avg_x = sum(p.x for p in self.particles) / len(self.particles)
+            avg_y = sum(p.y for p in self.particles) / len(self.particles)
+        else:
+            avg_x = sum(p.x * p.weight for p in self.particles) / total_weight
+            avg_y = sum(p.y * p.weight for p in self.particles) / total_weight
+        pose_msg = Pose2D()
+        pose_msg.x = float(avg_x)
+        pose_msg.y = float(avg_y)
+        pose_msg.theta = float(self.current_compass)
+        self.pose_pub.publish(pose_msg)
+    
     def displacement_handler(self, msg: Point):
         # Handle incoming displacement and observation data.
         dx = msg.x
@@ -221,11 +248,12 @@ class ParticleFilterNode(Node):
         self.robot_path_x += dx
         self.robot_path_y += dy
         self.observation_history.append((self.robot_path_x, self.robot_path_y, observation))
-        if len(self.observation_history) > self.max_history_length:
+        if len(self.observation_history) > MAX_HISTORY_LENGTH:
             self.observation_history.pop(0)
         
-        if displacement_magnitude < MIN_MOVEMENT_FOR_ELIMINATION:
-            return
+        # This causes a mis-match between particle paths and observation history lengths.
+        # if displacement_magnitude < MIN_MOVEMENT_FOR_ELIMINATION:
+        #     return
         
         for i, particle in enumerate(self.particles):
             noise_angle = random.uniform(-MOTION_NOISE_ANGLE_DEG, MOTION_NOISE_ANGLE_DEG) * math.pi / 180.0
@@ -238,19 +266,27 @@ class ParticleFilterNode(Node):
             noisy_dy *= scale
             particle.x += noisy_dx
             particle.y += noisy_dy
-            resolution = self.map['resolution']
-            map_width_m = self.map['width'] * resolution
-            map_height_m = self.map['height'] * resolution
-            if particle.x < 0 or particle.x >= map_width_m or particle.y < 0 or particle.y >= map_height_m:
-                particle.x = random.uniform(0, map_width_m)
-                particle.y = random.uniform(0, map_height_m)
-                particle.weight = particle.weight / 2.0
+            
+            # Out-of-bounds particles are taken care of by giving them negative weight in update_weights()
+            # resolution = self.map['resolution']
+            # map_width_m = self.map['width'] * resolution
+            # map_height_m = self.map['height'] * resolution
+            # if particle.x < 0 or particle.x >= map_width_m or particle.y < 0 or particle.y >= map_height_m:
+            #     particle.x = random.uniform(0, map_width_m)
+            #     particle.y = random.uniform(0, map_height_m)
+            #     particle.weight = particle.weight / 2.0
             
             particle.path.append((particle.x, particle.y))
-            if len(particle.path) > self.path_history_length:
-                particle.path = particle.path[-self.path_history_length:]
-        self.update_weights()
-        self.resample_particles()
+            if len(particle.path) > MAX_HISTORY_LENGTH:
+                particle.path = particle.path[-MAX_HISTORY_LENGTH:]
+        
+        # Only resample every MAX_HISTORY_LENGTH steps.
+        if len(self.observation_history) >= MAX_HISTORY_LENGTH:
+            self.update_weights()
+            self.show_max_weight_particle_info()
+            self.resample_particles()
+            self.observation_history = [] # Clear observation history
+        self.publish_estimated_pose()
     
     def update_weights(self):
         for particle in self.particles:
@@ -258,12 +294,17 @@ class ParticleFilterNode(Node):
                 # Use particle's own path and shared observation history
                 # Note: scorePath may need to match path length with observation history length
                 path = particle.path
+                # Get the most recent observations corresponding to the particle's path length.
                 observations = [obs[2] for obs in self.observation_history[-len(path):]] if len(self.observation_history) >= len(path) else [obs[2] for obs in self.observation_history]
                 if len(observations) == len(path):
-                    score = scorePath(path, observations, self.map)
-                    particle.weight += score
+                    if len(particle.path) != len(observations):
+                        self.get_logger().warn(f'update weights: Particle path length is {len(particle.path)} < MAX_HISTORY_LENGTH.')
+                    score = scorePath(path, observations, self.map) # Average score of all points in the particles path.
+                    particle.weight += score # will be PARTICLE_BASE_WEIGHT + average of scores, along with -RESEEDED_WEIGHT_PENALTY if applicable
+                    #self.get_logger().info(f'Particle scored with {len(path)} path points.')
                 else:
                     particle.weight = 0.0
+                    self.get_logger().warn(f'Particle path length {len(path)} does not match observations length {len(observations)}. Should not happen.')
             else:
                 particle.weight = 0.0
     
@@ -272,56 +313,75 @@ class ParticleFilterNode(Node):
             Error('Particles not initialized')
         if self.map is None:
             Error('Map is None')
-        total_weight = sum(p.weight for p in self.particles)
-        if total_weight <= 0:
-            self.get_logger().warn('All particle weights <= 0, using uniform resampling')
-            return
+        # total_weight = sum(p.weight for p in self.particles)
+        # if total_weight <= 0:
+        #     self.get_logger().warn('All particle weights <= 0, using uniform resampling') # This only happens if most particles don't match and many are out of bounds. Something is seriously wrong.
+        #     return
         resolution = self.map['resolution']
         map_width_m = self.map['width'] * resolution
         map_height_m = self.map['height'] * resolution
         cumulative = []
         cumsum = 0.0
         for particle in self.particles:
-            cumsum += particle.weight
+            cumsum += max(particle.weight, 0.0) # Negative weight particles are allowed but treated as zero weight for resampling to avoid affecting particles after them in the list.
             cumulative.append(cumsum)
         new_particles = []
-        random_particles = int(self.num_particles * RANDOM_RESAMPLING_PERCENTAGE)
+        random_particles = int(self.num_particles * RANDOM_RESAMPLING_PERCENTAGE) # Number of re-seeded particles
         
         for i in range(self.num_particles):
             if i > random_particles:
                 # resampling particle close the high weight particles
-                r = random.uniform(0, total_weight)
+
+                # Select a random particle based on their weights
+                r = random.uniform(0, cumsum)
                 selected_idx = 0
                 for j, cum in enumerate(cumulative):
                     if r <= cum:
                         selected_idx = j
                         break
                 old_particle = self.particles[selected_idx]
-                noise_x = random.gauss(0.0, RESAMPLE_NOISE_STD_DEV)
-                noise_y = random.gauss(0.0, RESAMPLE_NOISE_STD_DEV)
-                new_x = old_particle.x + noise_x
-                new_y = old_particle.y + noise_y
-                # Clamp to map boundaries
-                new_x = max(0.0, min(new_x, map_width_m - 1e-6))
-                new_y = max(0.0, min(new_y, map_height_m - 1e-6))
-                new_particle = Particle(new_x, new_y, self.observation_history)
+
+                new_x = old_particle.x
+                new_y = old_particle.y
+                if NOISY_RESAMPLE_POSITIONS:
+                    # Generate some noise for the resampled particle. May be unnecessary?
+                    noise_x = random.gauss(0.0, RESAMPLE_NOISE_STD_DEV)
+                    noise_y = random.gauss(0.0, RESAMPLE_NOISE_STD_DEV)
+                    new_x += noise_x
+                    new_y += noise_y
+                    # Clamp to map boundaries
+                    new_x = max(0.0, min(new_x, map_width_m - 1e-6))
+                    new_y = max(0.0, min(new_y, map_height_m - 1e-6))
+                new_particle = Particle(new_x, new_y)
                 new_particle.x = new_x
                 new_particle.y = new_y
-                new_particle.weight = old_particle.weight
-                # Copy path from old particle (or start fresh)
+                # Copy initial positions so we can keep track of where the particle started.
+                new_particle.initial_x = old_particle.initial_x
+                new_particle.initial_y = old_particle.initial_y
+
+                new_particle.weight = PARTICLE_BASE_WEIGHT
+                # Copy path from old particle with last point updated to new position
+                # new_particle.path = old_particle.path[:-1] + [(new_x, new_y)] if old_particle.path else [(new_x, new_y)]
                 new_particle.path = [(new_x, new_y)]
             else:
-                # completely random particles
+                # completely random particles ("re-seeding")
                 new_x = random.uniform(0, map_width_m)
                 new_y = random.uniform(0, map_height_m)
-                new_particle = Particle(new_x, new_y, self.observation_history)
+                new_particle = Particle(new_x, new_y)
                 new_particle.x = new_x
                 new_particle.y = new_y
-                new_particle.weight = 0.0
+                new_particle.initial_x = -69.0 # Indicate re-seeded particle
+                new_particle.initial_y = -69.0
+                new_particle.weight = PARTICLE_BASE_WEIGHT - RESEEDED_WEIGHT_PENALTY # We want to favour existing particles over re-seeded ones because otherwise they'll break light.world and dark.world
             new_particles.append(new_particle)
         self.particles = new_particles
         self.get_logger().info(f'Resampled {self.num_particles} particles')
 
+    def show_max_weight_particle_info(self):
+        if not self.particles:
+            return
+        max_particle = max(self.particles, key=lambda p: p.weight)
+        self.get_logger().info(f'Max weight particle: {max_particle}. \nPath length: {len(max_particle.path)} \nInitial position: ({max_particle.initial_x:.2f}, {max_particle.initial_y:.2f})')
 
 def main():
     rclpy.init()

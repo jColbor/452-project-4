@@ -82,6 +82,7 @@ def extract_map(node):
                 continue
             else:
                 row.append(-1)  # Unknown
+                ValueError(f'Unknown map character: {char} in map file: {full_map_path}')
         if row:  # Only add non-empty rows
             map_2d.append(row)
     
@@ -92,14 +93,14 @@ def extract_map(node):
     map_dict = {
         'data': map_2d,
         'resolution': resolution,
-        'width': len(map_2d[0]) if map_2d else 0,
+        'width': len(map_2d[0]) if map_2d[0] else 0,
         'height': len(map_2d)
     }
     
     node.get_logger().info(f'Loaded map: {map_dict["width"]}x{map_dict["height"]}, resolution={resolution}m')
     return map_dict
 
-    
+USE_ADJACENT_CELLS_FOR_SCORING = False
 def scorePoint(point, observation, map_dict):
     if map_dict is None or 'data' not in map_dict:
         return -10.0
@@ -113,7 +114,7 @@ def scorePoint(point, observation, map_dict):
     row = int(point[1] / resolution)
     
     if row < 0 or row >= height or col < 0 or col >= width:
-        return -10.0
+        return -10.0 # Kill off out-of-bounds particles. Negative-weight particles are NEVER chosen for resampling.
     
     map_value = map_data[row][col]
     
@@ -131,32 +132,35 @@ def scorePoint(point, observation, map_dict):
             match_score = 1.0 - abs(observation - 0.5) * 2.0
     
     adjacent_bonus = 0.0
-    for dr in [-1, 0, 1]:
-        for dc in [-1, 0, 1]:
-            if dr == 0 and dc == 0:
-                continue
-            r = row + dr
-            c = col + dc
-            if 0 <= r < height and 0 <= c < width:
-                adj_value = map_data[r][c]
-                if adj_value == 0:
-                    adj_expected = 1.0
-                    if observation > 0.5:
-                        adj_match = 1.0
+    if USE_ADJACENT_CELLS_FOR_SCORING:
+        for dr in [-1, 0, 1]:
+            for dc in [-1, 0, 1]:
+                if dr == 0 and dc == 0:
+                    continue
+                r = row + dr
+                c = col + dc
+                if 0 <= r < height and 0 <= c < width:
+                    adj_value = map_data[r][c]
+                    if adj_value == 0:
+                        adj_expected = 1.0
+                        if observation > 0.5:
+                            adj_match = 1.0
+                        else:
+                            adj_match = 1.0 - abs(observation - 0.5) * 2.0
                     else:
-                        adj_match = 1.0 - abs(observation - 0.5) * 2.0
-                else:
-                    adj_expected = 0.0
-                    if observation < 0.5:
-                        adj_match = 1.0
-                    else:
-                        adj_match = 1.0 - abs(observation - 0.5) * 2.0
-                adjacent_bonus += adj_match * 0.1
+                        adj_expected = 0.0
+                        if observation < 0.5:
+                            adj_match = 1.0
+                        else:
+                            adj_match = 1.0 - abs(observation - 0.5) * 2.0
+                    adjacent_bonus += adj_match / 8.0 # 8 adjacent cells
     
-    return match_score * 5.0 + adjacent_bonus
+    return match_score + adjacent_bonus / 10.0 # Weight adjacent bonus counts less
 
+# Returns the average score of all points in the path
 def scorePath(points, observations, map_dict):
-    if len(points) != len(observations):
+    if len(points) != len(observations): # Shouldn't happen
+        raise ValueError("helper_functions:scorePath - Points and observations must have the same length")
         return -10.0
     
     if len(points) == 0:
@@ -166,7 +170,7 @@ def scorePath(points, observations, map_dict):
     for i in range(len(points)):
         total_score += scorePoint(points[i], observations[i], map_dict)
     
-    return total_score / len(points)
+    return total_score / len(points) # Path score = Average score of points in the path
 
 def publish_map(map_dict, map_pub):
     """
