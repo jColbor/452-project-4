@@ -13,6 +13,7 @@ import random
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from rclpy.executors import MultiThreadedExecutor
 
 NUM_PARTICLES = 1000
 MIN_MOVEMENT_FOR_ELIMINATION = 0.1 # without this amount of movement no resampling nor assigning weights (deprecated)
@@ -23,7 +24,7 @@ MOTION_SCALE_MIN = 0.8  # Minimum scale factor for distance uncertainty
 MOTION_SCALE_MAX = 1.2  # Maximum scale factor for distance uncertainty
 PARTICLE_BASE_WEIGHT = 0.01 # Base/minimum weight for each particle
 RESEEDED_WEIGHT_PENALTY = 0.2 # one-time penalty to weight of a randomly re-seeded particle. Without this, light.world and dark.world are broken by too many random particles.
-MAX_HISTORY_LENGTH = 10 # Max length of observation & particle path history to keep for scoring
+MAX_HISTORY_LENGTH = 5 # Max length of observation & particle path history to keep for scoring
 NOISY_RESAMPLE_POSITIONS = False # Whether to shift particle positions when resampling
 
 class Particle:
@@ -49,7 +50,6 @@ class ParticleFilterNode(Node):
         self.robot_path_x = 0.0
         self.robot_path_y = 0.0
         self.particle_lock = threading.Lock()
-        self.executor = ThreadPoolExecutor(max_workers=8)
         self.get_logger().info('ParticleFilterNode constructed')
 
     def initialize(self):
@@ -273,14 +273,14 @@ class ParticleFilterNode(Node):
         
         # Update all particles in parallel using thread pool
         with self.particle_lock:
-            futures = []
-            for particle in self.particles:
-                future = self.executor.submit(self.update_particle_position, particle, dx, dy)
-                futures.append(future)
-            
-            # Wait for all particle updates to complete
-            for future in futures:
-                future.result()
+            with ThreadPoolExecutor() as pool:
+                futures = []
+                for particle in self.particles:
+                    future = pool.submit(self.update_particle_position, particle, dx, dy)
+                    futures.append(future)
+                # Wait for all particle updates to complete
+                for future in futures:
+                    future.result()
         
         # Only resample every MAX_HISTORY_LENGTH steps.
         if len(self.observation_history) >= MAX_HISTORY_LENGTH:
