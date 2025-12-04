@@ -24,7 +24,7 @@ MOTION_SCALE_MIN = 0.8  # Minimum scale factor for distance uncertainty
 MOTION_SCALE_MAX = 1.2  # Maximum scale factor for distance uncertainty
 PARTICLE_BASE_WEIGHT = 0.00 # Base/minimum weight for each particle
 RESEEDED_WEIGHT_PENALTY = 0.1 # one-time penalty to weight of a randomly re-seeded particle. Without this, light.world and dark.world are broken by too many random particles.
-MAX_HISTORY_LENGTH = 5 # Max length of observation & particle path history to keep for scoring
+MAX_HISTORY_LENGTH = 10 # Max length of observation & particle path history to keep for scoring
 NOISY_RESAMPLE_POSITIONS = False # Whether to shift particle positions when resampling
 PARTICLE_SCORE_EXPONENT = 7.0 # Exponent to make differences in particle scores more pronounced
 
@@ -144,7 +144,7 @@ class ParticleFilterNode(Node):
             marker.action = Marker.ADD
             marker.pose.position.x = float(particle.x)
             marker.pose.position.y = float(particle.y)
-            marker.pose.position.z = 0.1
+            marker.pose.position.z = 1.0
             marker.pose.orientation.w = 1.0
             marker.scale.x = 0.1
             marker.scale.y = 0.1
@@ -154,6 +154,7 @@ class ParticleFilterNode(Node):
             marker.color.g = 0.0
             marker.color.b = 0.0
             marker.color.a = 0.7
+
             marker_array.markers.append(marker)
         self.particles_pub.publish(marker_array)
     
@@ -177,7 +178,7 @@ class ParticleFilterNode(Node):
             marker.action = Marker.ADD
             marker.pose.position.x = float(x)
             marker.pose.position.y = float(y)
-            marker.pose.position.z = 0.15
+            marker.pose.position.z = 1.0
             marker.pose.orientation.w = 1.0
             marker.scale.x = square_size
             marker.scale.y = square_size
@@ -210,7 +211,7 @@ class ParticleFilterNode(Node):
                 pt = Point()
                 pt.x = float(x)
                 pt.y = float(y)
-                pt.z = 0.1
+                pt.z = 1.0
                 line_marker.points.append(pt)
             marker_array.markers.append(line_marker)
         self.observations_pub.publish(marker_array)
@@ -223,13 +224,16 @@ class ParticleFilterNode(Node):
     def publish_estimated_pose(self):
         if not self.particles:
             return
-        total_weight = sum(p.weight for p in self.particles)
-        if total_weight <= 0:
+        total_weight = 0.0
+        for particle in self.particles:
+            total_weight += max(particle.weight, 0.0) # Negative weight particles are treated as zero weight for averaging.
+
+        if total_weight == 0:
             avg_x = sum(p.x for p in self.particles) / len(self.particles)
             avg_y = sum(p.y for p in self.particles) / len(self.particles)
         else:
-            avg_x = sum(p.x * p.weight for p in self.particles) / total_weight
-            avg_y = sum(p.y * p.weight for p in self.particles) / total_weight
+            avg_x = sum(p.x * max(p.weight, 0.0) for p in self.particles) / total_weight
+            avg_y = sum(p.y * max(p.weight, 0.0) for p in self.particles) / total_weight
         pose_msg = Pose2D()
         pose_msg.x = float(avg_x)
         pose_msg.y = float(avg_y)
