@@ -15,17 +15,18 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from rclpy.executors import MultiThreadedExecutor
 
-NUM_PARTICLES = 1000
+NUM_PARTICLES = 3000
 MIN_MOVEMENT_FOR_ELIMINATION = 0.1 # without this amount of movement no resampling nor assigning weights (deprecated)
 RESAMPLE_NOISE_STD_DEV = 0.1 # deviation of particles
 RANDOM_RESAMPLING_PERCENTAGE = 0.01 # percentage of completely random particles
 MOTION_NOISE_ANGLE_DEG = 5.0  # Maximum angle noise in degrees for particle forward motion
 MOTION_SCALE_MIN = 0.8  # Minimum scale factor for distance uncertainty
 MOTION_SCALE_MAX = 1.2  # Maximum scale factor for distance uncertainty
-PARTICLE_BASE_WEIGHT = 0.01 # Base/minimum weight for each particle
-RESEEDED_WEIGHT_PENALTY = 0.2 # one-time penalty to weight of a randomly re-seeded particle. Without this, light.world and dark.world are broken by too many random particles.
+PARTICLE_BASE_WEIGHT = 0.00 # Base/minimum weight for each particle
+RESEEDED_WEIGHT_PENALTY = 0.1 # one-time penalty to weight of a randomly re-seeded particle. Without this, light.world and dark.world are broken by too many random particles.
 MAX_HISTORY_LENGTH = 5 # Max length of observation & particle path history to keep for scoring
 NOISY_RESAMPLE_POSITIONS = False # Whether to shift particle positions when resampling
+PARTICLE_SCORE_EXPONENT = 7.0 # Exponent to make differences in particle scores more pronounced
 
 class Particle:
     def __init__(self, initial_x, initial_y):
@@ -304,6 +305,8 @@ class ParticleFilterNode(Node):
                     score = scorePath(path, observations, self.map) # Average score of all points in the particles path.
                     particle.weight += score # will be PARTICLE_BASE_WEIGHT + average of scores, along with -RESEEDED_WEIGHT_PENALTY if applicable
                     #self.get_logger().info(f'Particle scored with {len(path)} path points.')
+                    if particle.weight > 0:
+                        particle.weight = particle.weight ** PARTICLE_SCORE_EXPONENT # Exponentiate to make differences more pronounced
                 else:
                     particle.weight = 0.0
                     self.get_logger().warn(f'Particle path length {len(path)} does not match observations length {len(observations)}. Should not happen.')
